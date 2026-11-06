@@ -3,9 +3,12 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Reporte por Mes Evolutivo — Peru Fibra</title>
+<title>Reporte Evolutivo Mensual — Peru Fibra</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%23FF5A0A'/%3E%3Cg fill='none' stroke='white' stroke-width='2.1' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 17V10'/%3E%3Cpath d='M12 17V7'/%3E%3Cpath d='M18 17v-4'/%3E%3C/g%3E%3C/svg%3E">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<!-- Chart.js y Plugin DataLabels para mostrar valores sobre las barras y líneas -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
@@ -222,6 +225,22 @@
   .btn.secondary:hover {
     background: var(--panel-hover);
     border-color: var(--line);
+  }
+
+  /* SECCIÓN DEL GRÁFICO EVOLUTIVO COMBINADO */
+  .chart-panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 24px;
+    margin-bottom: 28px;
+    box-shadow: var(--shadow-sm);
+  }
+
+  .chart-container {
+    position: relative;
+    height: 380px;
+    width: 100%;
   }
 
   /* TARJETAS KPI */
@@ -502,23 +521,36 @@
         <svg viewBox="0 0 24 24"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zM9 17H7v-7h2v7zm4 0h-2V7h2v10zm4 0h-2v-4h2v4z"/></svg>
       </div>
       <div>
-        <div class="brand-eyebrow"><span class="dot"></span>TECSYCOM · EVOLUTIVO MENSUAL</div>
-        <h1>Reporte por Mes Evolutivo</h1>
-        <div class="subtitle">Efectividad, productividad, reprogramaciones y cancelaciones — agrupado por zona y técnico.</div>
+        <div class="brand-eyebrow"><span class="dot"></span>TECSYCOM · EVOLUTIVO MULTI-MES</div>
+        <h1>Reporte Evolutivo General</h1>
+        <div class="subtitle">Evolutivo histórico por mes de efectividad, reprogramaciones y cancelaciones — con detalle por zona y técnico.</div>
       </div>
     </div>
 
     <div class="sync-control">
       <div class="filter-group">
-        <label for="fMesSheet">SELECCIONAR MES:</label>
+        <label for="fMesSheet">VER DETALLE DEL MES:</label>
         <select id="fMesSheet"></select>
       </div>
       <button class="btn" id="btnSincronizar">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.65-5.65"/></svg>
-        Sincronizar
+        Sincronizar Todo
       </button>
     </div>
   </header>
+
+  <!-- PANEL DE GRÁFICO EVOLUTIVO COMBINADO CON ETIQUETAS -->
+  <div class="chart-panel">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+      <div>
+        <h2 style="font-size: 18px; font-weight: 800; margin: 0; color: var(--text);">Evolutivo Historico Mensual</h2>
+        <div style="font-size: 13px; color: var(--text-muted); margin-top: 2px;">Comparativa de Órdenes Asignadas vs Finalizadas (con cantidades) y % de Efectividad (con porcentajes)</div>
+      </div>
+    </div>
+    <div class="chart-container">
+      <canvas id="evolutivoChart"></canvas>
+    </div>
+  </div>
 
   <div class="filters" id="filtersBar" style="display:none;">
     <div class="filter-group">
@@ -541,8 +573,8 @@
 
   <div id="content">
     <div class="empty">
-      <div class="big" id="statusMessage">Cargando datos del mes en curso…</div>
-      Conectando dinámicamente con Google Sheets.
+      <div class="big" id="statusMessage">Cargando datos evolutivos de Google Sheets…</div>
+      Descargando información multi-mes.
     </div>
   </div>
 
@@ -558,75 +590,255 @@
   const OBJETIVO = 0.55;
   const TECNICO_ALIAS = { "MARCO VALENCIA": "SERGIO ALVARADO" };
 
+  let monthList = [];
+  let multiMonthData = {}; 
   let rawRows = [];
   let sortState = { zona: {key:'efectividad', dir:-1}, tecnico: {key:'efectividad', dir:-1} };
   let layoutBuilt = false;
+  let evolutivoChartInstance = null;
 
   function initMonthSelector() {
     const sel = document.getElementById('fMesSheet');
     const now = new Date();
     
+    monthList = [];
     let optionsHtml = '';
-    for (let i = 0; i < 6; i++) {
+    for (let i = 5; i >= 0; i--) {
       let d = new Date(now.getFullYear(), now.getMonth() - i, 1);
       let m = String(d.getMonth() + 1).padStart(2, '0');
       let y = d.getFullYear();
       let sheetName = `Data_${m}_${y}`;
-      let labelName = d.toLocaleString('es', { month: 'long', year: 'numeric' }).toUpperCase();
-      optionsHtml += `<option value="${sheetName}">${labelName} (${sheetName})</option>`;
+      let labelName = d.toLocaleString('es', { month: 'short', year: 'numeric' }).toUpperCase();
+      monthList.push({ sheetName, labelName });
     }
+
+    const optionsForSelect = [...monthList].reverse();
+    optionsHtml = optionsForSelect.map(item => `<option value="${item.sheetName}">${item.labelName} (${item.sheetName})</option>`).join('');
     sel.innerHTML = optionsHtml;
   }
 
   window.addEventListener('DOMContentLoaded', () => {
     initMonthSelector();
-    fetchSheetData();
+    fetchAllMonthsData();
   });
 
-  // Evento al cambiar selector -> ejecuta la lectura automáticamente
-  document.getElementById('fMesSheet').addEventListener('change', fetchSheetData);
-  document.getElementById('btnSincronizar').addEventListener('click', fetchSheetData);
+  document.getElementById('fMesSheet').addEventListener('change', () => {
+    const selectedSheet = document.getElementById('fMesSheet').value;
+    if (multiMonthData[selectedSheet]) {
+      rawRows = multiMonthData[selectedSheet].rows;
+      render();
+    } else {
+      fetchSingleSheet(selectedSheet);
+    }
+  });
 
-  function fetchSheetData() {
-    const sheetName = document.getElementById('fMesSheet').value;
-    
-    // Reiniciar contenedores y variables para garantizar reconstrucción limpia
-    layoutBuilt = false;
+  document.getElementById('btnSincronizar').addEventListener('click', fetchAllMonthsData);
+
+  async function fetchAllMonthsData() {
     document.getElementById('filtersBar').style.display = 'none';
     document.getElementById('kpiSection').innerHTML = '';
     document.getElementById('content').innerHTML = `
       <div class="empty">
-        <div class="big" id="statusMessage">Sincronizando ${sheetName}…</div>
-        Espere mientras se descarga la información actualizada.
+        <div class="big" id="statusMessage">Sincronizando evolutivo multi-mes…</div>
+        Consultando información histórica de Google Sheets.
       </div>`;
 
-    const targetUrl = `${WEB_APP_URL}?sheet=${encodeURIComponent(sheetName)}`;
+    multiMonthData = {};
 
-    fetch(targetUrl)
-      .then(res => res.json())
-      .then(data => {
-        if (data.error || !Array.isArray(data) || data.length === 0) {
-          document.getElementById('content').innerHTML = `
-            <div class="empty">
-              <div class="big" style="color:var(--brand-orange);">Sin datos en ${sheetName}</div>
-              ${data.error || 'La hoja seleccionada no contiene registros para mostrar.'}
-            </div>`;
-          return;
-        }
+    const fetchPromises = monthList.map(item => {
+      const url = `${WEB_APP_URL}?sheet=${encodeURIComponent(item.sheetName)}`;
+      return fetch(url)
+        .then(res => res.json())
+        .then(data => {
+          if (!data.error && Array.isArray(data) && data.length > 0) {
+            const normalized = normalizeRows(data);
+            const aggregated = aggregate(normalized, r => 'ALL');
+            const tot = totals(aggregated);
+            multiMonthData[item.sheetName] = {
+              label: item.labelName,
+              rows: normalized,
+              totals: tot
+            };
+          }
+        })
+        .catch(() => { });
+    });
 
-        rawRows = normalizeRows(data);
+    await Promise.all(fetchPromises);
+
+    renderEvolutivoChart();
+
+    const selectedSheet = document.getElementById('fMesSheet').value;
+    if (multiMonthData[selectedSheet]) {
+      rawRows = multiMonthData[selectedSheet].rows;
+      document.getElementById('filtersBar').style.display = 'flex';
+      populateFilters(rawRows);
+      buildLayout();
+      render();
+    } else {
+      const availableSheets = Object.keys(multiMonthData);
+      if (availableSheets.length > 0) {
+        const lastSheet = availableSheets[availableSheets.length - 1];
+        document.getElementById('fMesSheet').value = lastSheet;
+        rawRows = multiMonthData[lastSheet].rows;
         document.getElementById('filtersBar').style.display = 'flex';
         populateFilters(rawRows);
         buildLayout();
         render();
-      })
-      .catch(err => {
+      } else {
         document.getElementById('content').innerHTML = `
           <div class="empty">
-            <div class="big" style="color:var(--red);">Error de conexión</div>
-            No se pudo consultar el Web App: ${err.message}
+            <div class="big" style="color:var(--brand-orange);">Sin datos históricos</div>
+            No se encontraron registros activos en las pestañas consultadas.
           </div>`;
+      }
+    }
+  }
+
+  function fetchSingleSheet(sheetName) {
+    const url = `${WEB_APP_URL}?sheet=${encodeURIComponent(sheetName)}`;
+    fetch(url)
+      .then(res => res.json())
+      .then(data => {
+        if (!data.error && Array.isArray(data)) {
+          rawRows = normalizeRows(data);
+          multiMonthData[sheetName] = {
+            label: sheetName,
+            rows: rawRows,
+            totals: totals(aggregate(rawRows, r => 'ALL'))
+          };
+          renderEvolutivoChart();
+          render();
+        }
       });
+  }
+
+  function renderEvolutivoChart() {
+    const ctx = document.getElementById('evolutivoChart').getContext('2d');
+    
+    const labels = [];
+    const dataAsignados = [];
+    const dataFinalizados = [];
+    const dataEfectividad = [];
+
+    monthList.forEach(item => {
+      if (multiMonthData[item.sheetName]) {
+        const t = multiMonthData[item.sheetName].totals;
+        labels.push(item.labelName);
+        dataAsignados.push(t.asignados);
+        dataFinalizados.push(t.finalizado);
+        dataEfectividad.push((t.efectividad * 100).toFixed(1));
+      }
+    });
+
+    if (evolutivoChartInstance) {
+      evolutivoChartInstance.destroy();
+    }
+
+    // Registrar y configurar ChartDataLabels para mostrar cantidades y porcentajes
+    Chart.register(ChartDataLabels);
+
+    evolutivoChartInstance = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels: labels,
+        datasets: [
+          {
+            type: 'line',
+            label: '% Efectividad',
+            data: dataEfectividad,
+            borderColor: '#FF5A0A',
+            backgroundColor: '#FF5A0A',
+            borderWidth: 3,
+            fill: false,
+            yAxisID: 'yEfectividad',
+            tension: 0.3,
+            pointRadius: 6,
+            pointHoverRadius: 8,
+            datalabels: {
+              align: 'top',
+              anchor: 'end',
+              color: '#FF5A0A',
+              font: { family: 'JetBrains Mono', weight: 'bold', size: 11 },
+              formatter: (value) => value + '%'
+            }
+          },
+          {
+            type: 'bar',
+            label: 'Asignados',
+            data: dataAsignados,
+            backgroundColor: 'rgba(148, 163, 184, 0.45)',
+            borderColor: '#94A3B8',
+            borderWidth: 1,
+            borderRadius: 6,
+            yAxisID: 'yCantidades',
+            datalabels: {
+              align: 'end',
+              anchor: 'end',
+              color: '#475569',
+              font: { family: 'JetBrains Mono', weight: 'bold', size: 10 },
+              formatter: (value) => value > 0 ? value : ''
+            }
+          },
+          {
+            type: 'bar',
+            label: 'Finalizados',
+            data: dataFinalizados,
+            backgroundColor: 'rgba(22, 163, 74, 0.8)',
+            borderColor: '#16A34A',
+            borderWidth: 1,
+            borderRadius: 6,
+            yAxisID: 'yCantidades',
+            datalabels: {
+              align: 'end',
+              anchor: 'end',
+              color: '#15803D',
+              font: { family: 'JetBrains Mono', weight: 'bold', size: 10 },
+              formatter: (value) => value > 0 ? value : ''
+            }
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        layout: {
+          padding: { top: 25, right: 15, left: 10, bottom: 0 }
+        },
+        plugins: {
+          legend: { position: 'top', labels: { usePointStyle: true, font: { family: 'Plus Jakarta Sans', weight: '600' } } },
+          tooltip: {
+            callbacks: {
+              label: function(context) {
+                if (context.dataset.yAxisID === 'yEfectividad') {
+                  return `Efectividad: ${context.raw}%`;
+                }
+                return `${context.dataset.label}: ${context.raw} OTs`;
+              }
+            }
+          }
+        },
+        scales: {
+          x: { grid: { display: false } },
+          yCantidades: {
+            type: 'linear',
+            position: 'left',
+            title: { display: true, text: 'Cantidad de OTs', font: { weight: 'bold' } },
+            grid: { color: '#E2E8F0' },
+            beginAtZero: true
+          },
+          yEfectividad: {
+            type: 'linear',
+            position: 'right',
+            title: { display: true, text: '% Efectividad', font: { weight: 'bold' } },
+            min: 0,
+            max: 100,
+            ticks: { callback: v => v + '%' },
+            grid: { drawOnChartArea: false }
+          }
+        }
+      }
+    });
   }
 
   function clean(v){ return (v===undefined||v===null) ? '' : String(v).trim(); }
